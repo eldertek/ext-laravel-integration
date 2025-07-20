@@ -7,13 +7,19 @@ use Symfony\Component\Console\Exception\LogicException;
 
 class DebugCommand extends Command
 {
-    protected $signature = 'plesk-ext-laravel:debug';
+    protected $signature = 'plesk-ext-laravel:debug {--trace-quiet : Trace quiet option registrations}';
 
     protected $description = 'Debug command registration issues';
 
     public function handle()
     {
         $this->info('=== Debugging Command Registration ===');
+        
+        // Check if we should trace quiet option
+        if ($this->option('trace-quiet')) {
+            $this->traceQuietOption();
+            return;
+        }
         
         try {
             // Get the application instance
@@ -83,5 +89,119 @@ class DebugCommand extends Command
             $this->error("\nUnexpected error: " . $e->getMessage());
             $this->line("Stack trace:\n" . $e->getTraceAsString());
         }
+    }
+    
+    /**
+     * Trace where the quiet option is being registered
+     */
+    protected function traceQuietOption()
+    {
+        $this->info('=== Tracing Quiet Option Registrations ===');
+        $this->line('');
+        
+        // Test 1: Check if Laravel adds quiet by default
+        $this->line('1. Checking Laravel default command options:');
+        
+        // Create a minimal test command
+        $testCommand = new class extends Command {
+            protected $signature = 'test:minimal';
+            protected $description = 'Minimal test command';
+            
+            public function handle() {
+                // Empty
+            }
+        };
+        
+        $definition = $testCommand->getDefinition();
+        $hasQuiet = $definition->hasOption('quiet');
+        $this->line('   Minimal command has quiet option: ' . ($hasQuiet ? 'YES' : 'NO'));
+        
+        if ($hasQuiet) {
+            $quiet = $definition->getOption('quiet');
+            $this->line('   - Shortcut: ' . $quiet->getShortcut());
+            $this->line('   - Description: ' . $quiet->getDescription());
+        }
+        
+        // Test 2: Check when quiet is added
+        $this->line('');
+        $this->line('2. Checking when quiet option is added:');
+        
+        // Hook into the application to trace
+        $app = $this->getApplication();
+        $this->line('   Application class: ' . get_class($app));
+        
+        // Check if app has global quiet option
+        $appDef = $app->getDefinition();
+        $appHasQuiet = $appDef->hasOption('quiet');
+        $this->line('   Application has global quiet: ' . ($appHasQuiet ? 'YES' : 'NO'));
+        
+        // Test 3: Try to identify the conflict source
+        $this->line('');
+        $this->line('3. Analyzing potential conflicts:');
+        
+        // Get all registered commands
+        $commands = $app->all();
+        $conflictingCommands = [];
+        
+        foreach ($commands as $name => $command) {
+            try {
+                $def = $command->getDefinition();
+                $options = $def->getOptions();
+                
+                foreach ($options as $option) {
+                    if ($option->getName() === 'quiet') {
+                        // Check if this is different from the global quiet
+                        if ($appHasQuiet) {
+                            $globalQuiet = $appDef->getOption('quiet');
+                            if ($option !== $globalQuiet) {
+                                $conflictingCommands[] = [
+                                    'name' => $name,
+                                    'class' => get_class($command),
+                                    'description' => $option->getDescription(),
+                                    'shortcut' => $option->getShortcut(),
+                                ];
+                            }
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                $this->warn("   Error checking command '{$name}': " . $e->getMessage());
+            }
+        }
+        
+        if (empty($conflictingCommands)) {
+            $this->info('   No conflicting quiet options found.');
+        } else {
+            $this->warn('   Found commands with different quiet options:');
+            foreach ($conflictingCommands as $cmd) {
+                $this->line("   - {$cmd['name']} ({$cmd['class']})");
+                $this->line("     Description: {$cmd['description']}");
+                $this->line("     Shortcut: {$cmd['shortcut']}");
+            }
+        }
+        
+        // Test 4: Check inheritance chain
+        $this->line('');
+        $this->line('4. Checking command inheritance:');
+        
+        $this->line('   DebugCommand inheritance chain:');
+        $class = new \ReflectionClass($this);
+        $indent = '   ';
+        while ($class) {
+            $this->line($indent . '- ' . $class->getName());
+            if ($class->getName() === Command::class || $class->getName() === 'Symfony\Component\Console\Command\Command') {
+                break;
+            }
+            $indent .= '  ';
+            $class = $class->getParentClass();
+        }
+        
+        $this->line('');
+        $this->info('=== Trace Complete ===');
+        $this->line('');
+        $this->line('To fix the "quiet option already exists" error:');
+        $this->line('1. Ensure commands don\'t manually add a quiet option');
+        $this->line('2. Check if any service providers are modifying command definitions');
+        $this->line('3. Verify no command is trying to override the global quiet option');
     }
 }
