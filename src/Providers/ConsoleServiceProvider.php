@@ -8,6 +8,7 @@ use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use PleskExtLaravel\Console\Commands\ConfigSource;
 use PleskExtLaravel\Console\Commands\ListEnv;
+use PleskExtLaravel\Console\Commands\DebugCommand;
 use Psr\Container\ContainerExceptionInterface;
 
 class ConsoleServiceProvider extends ServiceProvider
@@ -25,10 +26,18 @@ class ConsoleServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(self::PLESK_EXT_LARAVEL_CONFIG_PATH, 'plesk-ext-laravel');
         config()->set('plesk-ext-laravel.config-source', $configSource);
 
-        $this->commands([
-            ListEnv::class,
-            ConfigSource::class,
-        ]);
+        try {
+            $this->commands([
+                ListEnv::class,
+                ConfigSource::class,
+                DebugCommand::class,
+            ]);
+        } catch (\Exception $e) {
+            // Log the error but don't fail the entire registration
+            if ($this->app->runningInConsole()) {
+                error_log('Plesk Laravel Integration: Error registering commands - ' . $e->getMessage());
+            }
+        }
     }
 
     public function boot()
